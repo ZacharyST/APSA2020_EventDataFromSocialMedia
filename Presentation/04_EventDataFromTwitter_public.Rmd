@@ -1,0 +1,366 @@
+---
+title: "Creating Event Data"
+author: "Zachary C. Steinert-Threlkeld"
+date: "09.08.2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# SETUP 
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
+knitr::opts_knit$set(root.dir ='/Users/Zack/Documents/UCLA/Courses/EventDataFromSocialMedia/')
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+
+library(dplyr)  # for sample_n
+library(rtweet)  # parsing tweets
+library(jsonlite)  # parsing tweets
+library(PRROC)  # for evaluating classifier fit
+```
+
+We will use functionality in ``rtweet`` and other packages.  In addition, let us use two datasets that I have provided.  One is 50,000 tweets from the United States on January 21, 2017, the first Women's March.  The second is the ten minute sample of tweets using a mixture of keywords from the streaming API.
+
+```{r, eval=TRUE, cache=TRUE}
+wm <- read.csv('Data/teaching_US_2017-01-21.csv.gz')
+```
+
+Below I have attempted to use ``parse_stream``.  You will get an error message because there are tweets with broken JSON formatting.  This happens to be everytime I work with tweets.  
+
+```{r, eval=TRUE, error=TRUE}
+fails <- parse_stream('Data/teaching_tweets_mixture.json')
+```
+
+The solution is to read the file line by line and skip bad tweets.  Frankly, I *strongly prefer* Python for my data processing because it is very easy to read line by line and skip bad lines.  In R, as you will see shortly, this process is more cumbersome and ``tryCatch`` is horrible.  Nonetheless, I wanted to keep everything in R for this class, so I tortured myself for 90-120 minutes figuring things out.  
+
+The below code shows my hacked solution.  It:
+1. Uses ``readLines`` to create a character vector that is a giant string for each line of the file it reads.
+2. The end goal is to have a data frame.  However, tweets will have different fields depending on what they contain, so a data frame would have different columns.  R does not like this, and I could not find an obvious equivalent of ``pandas.io.json.json_normalize``, the Python function that coerces lists of tweets with different fields into one data frame.  I there made a function to keep the columns of interest.
+- *Modify df in this function for the fields that you want.*  This step will require a lot of working with tweets, adding fields as you see new ones you want.
+- *The if statement is for tweets without a field wanted.*  See my comments in the function for ideas of ways to improve this process.
+3. The loop reads each tweet, handles any errors, and builds a data frame.  This data frame is what we will analyze.
+- It would be nice to make this loop its own function.  
+
+Note that this code is slow.  It takes more time to convert the tweets to a data frame than it did to download the tweets, much slower than my Python equivalent.  Hopefully it is my fault and not R's.  ``readJSON`` is notoriously slow, but ``stream_in`` from ``jsonlite`` appears to only work on a file, not a loaded string.
+
+```{r, eval=FALSE, cache=TRUE}
+thetweets <- readLines('Data/teaching_tweets_mixture.json')
+orig_n <- length(thetweets)  # To know later how many tweets I lose
+
+# tweet is JSON formatted string
+parseTweet <- function(tweet){
+  temp <- fromJSON(tweet)
+  
+  # There must be a better way of doing this.
+  if(is.null(temp$user$location)){
+    temp$user$location <- NA
+  }
+  
+  # How to have data.frame handle fields with NULL values?  The loop above is my answer, but I am sure there is a more elegant solution.
+  df <- data.frame(lang=temp$lang, text=temp$text, created_at = temp$created_at, id = temp$id_str, source = temp$source, user.id = temp$user$id_str, user.sn = temp$user$screen_name, user.location=temp$user$location, user.created_at=temp$user$created_at)
+  return(df)
+}
+```
+
+Below implements the above function.  I have run it before compiling this document because the code runs very slowly.  
+```{r, eval=FALSE, echo=TRUE}
+tweet_mixture <- NA
+i <- 0
+for(line in 1:length(thetweets)){
+  i <- i + 1
+# This tryCatch structure is here: https://stackoverflow.com/questions/8093914/use-trycatch-skip-to-next-value-of-loop-upon-error
+  skip_to_next <- FALSE
+  tryCatch(
+  {
+    tweet_df <- parseTweet(tweet=thetweets[line])
+  },
+  error = function(e){
+    #message(sprintf("Error: %s", e))  # No need to show the errors when compling, though they are useful for you to see when you are working on your own.
+    skip_to_next <<- TRUE
+  }
+  )
+  if(skip_to_next){  # Go to next line if there was an error
+    next
+  }
+  if(!skip_to_next){
+   tweet_mixture <- rbind(tweet_mixture, tweet_df)
+  }
+  if(i %% 1000 == 0){  # I like to know how far along I am.  It calms my worry.
+    print(i)
+  }
+}
+
+print(paste0(round(nrow(tweet_mixture)/orig_n*100,2), '% of tweets are kept.'))
+
+write.csv(tweet_mixture, '../Data/teaching_tweets_mixture.csv')
+```
+
+
+# TYPES OF EVENTS
+In the first class, I alluded to a coding scheme called CAMEO, which stands for Conflict and Mediation Event Observations.  Created by Philip Schrodt and Deborah Garner in the early 2000s, wtih support from the National Science Foundation, CAMEO includes 20 parent event types arranged in appproximate order of increasing intensity.  The following screenshot shows the events that CAMEO records.  Note that each has several child and grandchild events.
+
+<center>
+![](../../Images/CAMEO.png)
+
+</center>
+
+These categories in turn are derived from extensive dictionaries.   
+
+of these, especially ``MAKE PUBLIC STATEMENT``, ``APPEAL``, and ``EXPRESS INTENT TO COOPERATE`` are verbal in nature, they can be coded directly from tweets.  Others, such as ``PROTEST``, ``ASSAULT``, or ``FIGHT`` are physical, so tweets themselves do not count as events.  They may be evidence of events elsewhere, but knowing that requires more work than for the verbal events. As we discuss different methods for coding event data, it is important to keep this distinction in mind.
+
+# IDENTIFY EVENTS
+This section now presents, at a very high level, versions of the three approaches to creating event data that I discussed in the first class.  The manual approach entails reading all documents (tweets).  The automatic approach involves rules, often derived from classification algorithms of varying copmlexity.  The hybrid approach uses rules to filter raw data for analysis by a team of humans.
+
+## Manual
+In many ways, this approach is the simplest.  Load data and read it.  If you read tweets that are the result of parameters passed to the Search or Streaming API, that still counts as a manual approach.
+
+This approach requires the least amount of coding.  Its main purpose is to add metadata that may help coders or later aggregation.  It also can be used to do light filtering, such as by keeping only certain sources, 
+
+```{r, eval=TRUE, cache=TRUE}
+orig <- data.frame(parse_stream('Data/random_60s.json'))
+```
+
+Below are some ways I like to inspect the data.
+
+```{r, eval=TRUE, cache=TRUE}
+dim(orig)
+
+head(orig)
+
+sort(names(orig))
+```
+
+Let's add some metadata to make some later work easier.
+
+```{r, eval=TRUE, cache=TRUE}
+orig$created_at_date <- substr(orig$created_at, 1, 10)
+orig$created_at_hour <- substr(orig$created_at, 12, 13)
+
+orig$account_created_at_date <- substr(orig$account_created_at, 1, 10)
+```
+
+
+Let's look at some columns that seem promising.
+
+```{r, eval=TRUE, cache=TRUE}
+table(orig$place_type)
+table(orig$country_code)
+
+table(orig$place_full_name)
+
+sources <- data.frame(table(orig$source))
+sources <- sources[order(sources$Freq, decreasing=TRUE),]
+
+head(orig$hashtags)
+htags <- data.frame(table(unlist(orig$hashtags)))
+htags <- htags[order(htags$Freq, decreasing=TRUE),]
+```
+
+### Add place names
+In this class, I am not going to add places to tweets if they do not already have it.  It is common to use the ``location`` field (the user self-reported location), a place name mentioned in a tweet, or both to assign location to a tweet.  You could also assign it when you are coding tweets and see a place name.
+
+
+
+## Automatic
+The automatic approach requires having a rule or series of rules that will identify events.  I will load a third dataset to make the coding a little more productive.  
+
+I am going to use the processed .csv from the last class.  I want to do this to show you how different parts of a data processing pipeline fit together and why it is important to think carefuly about the data to keep.
+```{r, eval=TRUE, cache=TRUE}
+mixture <- read.csv('Data/teaching_tweets_mixture.csv')
+
+dim(mixture)
+
+head(mixture)
+```
+
+**Question: what are some fields that perhaps we would like to use?**
+
+
+To recap, the three datasets are now ``mixture``, ``wm``, ``orig``.
+
+There are two broad automatic approaches: using a dictionary or dictionaries and building a classifier to identify events.
+
+### Dictionary
+We will now use a **noun dictionary** to identify events.
+```{r, eval=TRUE, echo=TRUE}
+wm_protest <- c('protest','march','whywemarch','womensmarch','whyimarch')
+
+wm$protest <- grepl(paste(wm_protest, collapse="|"), wm$text, ignore.case=TRUE)
+```
+
+```{r, eval=TRUE}
+protest <- c('protest','demonstration','gather')
+
+mixture$protest <- grepl(paste(protest, collapse="|"), mixture$text, ignore.case=TRUE)
+orig$protest <- grepl(paste(protest, collapse="|"), orig$text, ignore.case=TRUE)
+```
+
+We will now use a **verb dictionary** for a similar task.  Let us see if we identify actions based on words.
+```{r, eval=TRUE, ache=TRUE}
+attack <- c('attack','assault','run at','charge','fight')
+
+wm$attack <- grepl(paste(attack, collapse="|"), wm$text, ignore.case=TRUE)
+orig$attack <- grepl(paste(attack, collapse="|"), orig$text, ignore.case=TRUE)
+mixture$attack <- grepl(paste(attack, collapse="|"), mixture$text, ignore.case=TRUE)
+```
+
+### Classifier
+I will demonstrate a very simplified, high-level event classifier.  Note that it does not actually identify protest because I label the training data randomly.  I have tried to explain the purpose of each step and indicate any steps I skip, like not having a testing set of data.  Please ask questions.
+
+Event data require supervised learning. You could use unsupervised learning to discover themes in text, but I would not create event data without a model trained on labeled data.
+
+Building an event classifier is the same as building any other classifier.  You need labeled data and a held out test set to evaluate the trained model, then you apply that model to the full dataset.  
+
+Because it is too much work to generate labels for a class, I am going to randomly create them.  The below code creates a training dataset and uses ``rbinom`` to assign labels.
+
+```{r, eval=TRUE, cache=TRUE}
+desiredSize <- 1000
+
+train_test <- sample_n(wm, desiredSize)
+# train_test <- wm %>% sample_frac(round(desiredSize/nrow(wm), 2))  # Get 1000 rows.  Could also use sample_frac()
+
+train <- sample_frac(train_test, .8)
+test <- anti_join(train_test, train, by='id')
+```
+
+Did I split the train and test correctly?
+
+```{r, eval=TRUE, cache=TRUE}
+ifelse(sum(test$id %in% train$id) == 0, 'Yes!', 'Sad :(') 
+```
+
+Now, use labels in the training data to make a model.  Remember we have them from earlier.
+```{r, eval=TRUE, cache=TRUE}
+train$protest_DV <- ifelse(train$protest==TRUE, 1, 0) 
+
+model <- glm(protest_DV ~ user.statuses_count + user.followers_count + user.friends_count , data=train, family='binomial')
+```
+
+Use this model to guess on the test data.
+```{r, eval=TRUE, cache=TRUE}
+test$protest_predicted <- predict.glm(object=model, newdata=test)
+```
+
+Evaluate the model using  a PR or AUC curve.
+```{r, eval=TRUE, cache=TRUE}
+pr <- pr.curve(scores.class0=test$protest_predicted, weights.class0=test$protest, curve=TRUE)
+
+plot(pr)
+```
+
+Let's say we like this model.  Now, apply it to the full dataset.
+```{r, eval=TRUE, cache=TRUE}
+wm$protest_predicted <- predict.glm(object=model, newdata=wm)
+```
+
+Note that I have skipped several steps.  In no particular order, building the classifier should:
+1. Iterate over ``train_test`` several times to generate several train and test sets.
+2. Use tweet text that has been cleaned (remove stopwords).
+3. Be more complicated than a logistic regression?  This point is phrased as a question because tweets are short text in often very colloquial styles.  A logistic regression is probably too simple, but in my expeirence it certainly is good enough at the start of a project because of the nature of tweets.  My knowledge of NLP stopped just before deep learning text models became widely used.
+
+### Aggregation
+Newspaper articles are convenient because they already aggregate events by day.  It is highly likely you will get multiple tweets per day about an event, in which case you need to aggregate.  
+
+The current best resolution in event data is city day, though the Crowd Counting Consortium and ACLED, which are hybrid approaches, can record intracity variation.  We will therefore need to determine how finely to aggregate the tweets.  This task is saved for the coding section.
+
+## Hybrid
+A hybrid approach applies filters to a dataset to generate a smaller dataset of content to code.  This smaller dataset will consist of items very likely to be a protest.  
+
+Here is a filter based on a dictionary.
+```{r, eval=TRUE}
+wm_hybrid <- subset(wm, protest==TRUE)
+
+nrow(wm_hybrid) - nrow(wm)
+```
+
+Maybe you only want tweets from old accounts, thinking they are less likely to be bots.
+
+```{r, eval=TRUE}
+orig_hybrid <- subset(orig, as.Date(account_created_at_date) <= as.Date('2016-01-1'))
+
+nrow(orig_hybrid) - nrow(orig)                       
+```
+
+A better approach, especially as you get very large datasets, is to filter based on the output of the classifier (or classifiers) you generate for an automatic pipeline.  That is, instead of taking the "automatic" part as the ending step for identifying events, treat it like a middle step.
+
+```{r, eval=TRUE}
+# What classifier output value to use to filter?  I like to use the following two pieces of output to decide.  
+summary(wm$protest_predicted)  
+quantile(wm$protest_predicted, probs=seq(0, 1, by=.01), na.rm=TRUE)
+predicted_freq <- data.frame(table(round(wm$protest_predicted, 2)))
+tail(predicted_freq, 100)  # I like -2.11 because decay rate seems to slow there
+
+plot(x=predicted_freq$Var1, predicted_freq$Freq)
+
+wm_hybrid2 <- subset(wm, protest_predicted >= -2.11)
+```
+
+
+
+# YOUR TURN
+For this section, we will work with the four other datasets available at [this class' respository](https://github.com/ZacharyST/APSA2020_EventDataFromSocialMedia/tree/master/Data).  You can start with whichever dataset you want.
+
+## Location Information
+Look at the strings in the user location field.  Can you use them to assign place to the tweets?
+
+```{r}
+# Location from user profile here
+```
+
+Do any tweets mention place names?  You could download a place name dictionary or make your own vector of places.
+
+```{r}
+
+```
+
+## Actors
+Choose a dataset and identify actors documented in tweets.  You could use the user profile description or the tweet text.  This process could be manual, automatic, or hybrid; your choice.
+
+```{r}
+Here
+```
+
+## Sample 10 Minutes
+Load the ``teaching_random_sample10min.json`` dataset and do the following.
+1. Manual.  Look at a random collection of the tweets.  Do they appear to contain any political events?
+2. Automatic.  Build a dictionary to identify possible events.
+3. Hybrid.  Look at the events from Step 2.  Would you classify them as actual events?
+
+Before converting the .json to a data frame, I would select a small sample after ``readLines``, like 1000 tweets.  **Hint: look at the documention for ``readLines``.**  It takes my MacBook Pro about 15 minutes to convert about 30000 tweets.
+```{r}
+Here
+```
+
+## Hong Kong
+Load ``teaching_HK_2019-03-01_2019-12-31.csv``.  Try the following exercises:
+1. Keep only English tweets.  
+2. Keep only tweets from users in Hong Kong.
+3. Identify events that are APPEALs or DEMANDs.
+
+```{r}
+Here
+```
+
+## Lebanon
+Load ``teaching_LB_2019-10-01_2019-12-08.csv``  Try the following exercises:
+1. Keep only Arabic tweets.
+2. Build a dictionary to identify tweets about police.  Hint: Use Google Translate for Arabic words.
+3. How many events involving police do you find?  Do your results change when you aggregate by city-day?
+
+```{r}
+Here
+```
+
+## Women's March
+Load ``teaching_US_2017-01-21.csv``.  Try the following exercises:
+1. Read tweets to get a feel for what they are talking about.  
+2. Separate the data frame into tweets from news organizations and tweets from not news organizations.  Hint: you will need to create a vector of account names.
+3. Build a dictionary to identify events.
+4. Compare the events recorded via newspapers and via the other tweets.
+
+```{r}
+Here
+```
+
+
