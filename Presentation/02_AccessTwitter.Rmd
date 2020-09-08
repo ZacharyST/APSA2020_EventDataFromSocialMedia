@@ -1,0 +1,225 @@
+---
+title: "Accessing Twitter Data"
+author: "Zachary Steinert-Threlkeld"
+institute: "Luskin School of Public Affairs, UCLA"
+date: "09.08.2020"
+output: 
+  beamer_presentation:
+    theme: "Warsaw"
+    colortheme: "beaver"
+    fonttheme: "structurebold"
+    keep_tex: true
+    toc: true
+    includes:
+      in_header: /Users/Zack/Documents/UCLA/Template/beamer_header.txt
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Introduction
+## Me + Twitter + Research
+\begin{block}{Geolocated tweets to understand protests}
+\begin{itemize}
+\item Streaming API for tweets in real time, multiple connections (apps) for multiple tasks.
+\item REST API for follower, friend relationships.
+\item REST API for tweet history.
+\end{itemize}
+\end{block}
+
+## !(Me + Twitter + Research)
+\begin{itemize}
+\item Search API
+\item Experiments (bots)
+\end{itemize}
+\vspace{1cm}
+\pause
+\emph{As of July 2020, \href{https://developer.twitter.com/en/docs/twitter-api/early-access}{Twitter is deploying a major update, v2, of its API}.  This course assumes v1, which is still the standard.}
+
+## Self-Promotion
+\begin{columns}[onlytextwidth,T]
+  \begin{column}{.45\linewidth}
+    \includegraphics[width=\linewidth]{../../Images/tad_cover.jpg}
+  \end{column}
+  \begin{column}{.45\linewidth}
+  \emph{Twitter as Data}
+    \begin{itemize}
+    \item 2018, largely developed 2014-2016.
+    \item R + Python. \pause
+    \item Old: idiosyncratic technical features (rate limits, API endpoints), application creation was simpler.
+    \item Today: Updated app creation; \texttt{rtweet}.
+    \end{itemize}
+    
+  \end{column}
+\end{columns}
+
+## Pacing
+If you want or need to create a Twitter developer account, please try to follow the steps as I present them.
+- Do not hesitate to ask a question or ask me to slow down.
+
+If you are not able to create an app in time for the next class, do not worry. \pause
+- I expect you will not get the application for a developer account.
+- \texttt{rtweet} lets you authenticate as a user, meaning you can work on your own Twitter code in the next lecture.
+
+# Make Account
+
+## Website
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_newaccount.png}
+
+
+## Create Account
+\centering
+\includegraphics[width=.9\linewidth]{../../Images/twitter_newaccount2.png}
+
+## Create Account
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_newaccount3.png}
+
+## Developer Screen
+\vspace{-.25cm}
+\href{developer.twitter.com}{developer.twitter.com} \
+
+\includegraphics[width=\linewidth]{../../Images/twitter_developer1.png}
+
+
+## Apply for Developer Account
+\vspace{-.25cm}
+\href{https://developer.twitter.com/en/apply-for-access}{First time ever, apply for developer account.} \
+
+\includegraphics[width=\linewidth]{../../Images/twitter_developer2.png}
+
+
+## Apply for Developer Account
+\vspace{-.25cm}
+After many questions, you will see this screen.  \
+\begin{center}
+\includegraphics[width=.75\linewidth]{../../Images/twitter_developer3.png} \
+\end{center}
+\vspace{-.25cm}
+Approval for a developer account takes a stochastic amount of days.
+
+
+
+## Tips
+\begin{itemize}
+\item I prefer to have one account per e-mail address, separate browsers too if possible. \pause But with @gmail, add . within address and Google ignores the period but Twitter does not.
+\item If developer-only account, use semi-regularly to not look like a bot.
+\end{itemize}
+
+
+
+# Create Application
+
+## Apply
+\vspace{-.25cm}
+\href{https://developer.twitter.com/en/apps/}{https://developer.twitter.com/en/apps/} \
+\includegraphics[width=\linewidth]{../../Images/twitter_devApp1.png}
+
+## Apply
+\vspace{-.25cm}
+I prefer my account's Twitter homepage for the website URL. \
+\centering
+\includegraphics[height=.75\linewidth]{../../Images/twitter_devApp2.png}
+
+## Apply
+\vspace{-.25cm}
+You \emph{must use} this callback URL for \texttt{rtweet}. \
+NB: \texttt{rtweet} is the first time I have seen someone require the Callback URL.  No apps I have created otherwise have it, and they work fine.
+\centering
+\includegraphics[height=.75\linewidth]{../../Images/twitter_devApp3.png}
+
+## Apply
+\vspace{-.25cm}
+The application is now available for use. \pause \emph{I am surprised it happened instantaneously.} \
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_devApp4.png}
+
+# Generate Token
+
+## Overview
+To use Twitter's API, you must create a token for the application.  The token is a trusted certificate that you will later present to Twitter each time you connect to an API endpoint. \
+
+Two authentication methods.
+\begin{enumerate}
+\item Browser based from R
+\item \emph{Access token \& access token secret}
+\end{enumerate}
+
+I prefer \#2, and it is what I show today.  Both enable the same functionality, but \#2 does not require an interactive session, which is important once you want to set up a persistent data collection pipeline.
+
+## Navigate to App
+\vspace{-.25cm}
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_devApp4.png}
+
+## Note Consumer API Keys
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_authentication1.png}
+
+## Note Consumer API Keys
+```{r, eval=FALSE, echo=TRUE}
+api_key <- 'CkUcfEdIvlX9c4OkBwcv062ay'
+api_key_secret <- 'lS8AuQKK7g4SD6KWzFJ84qEW7Ewqcv2OJIt
+NcwHJJWJYtumGfm'
+```
+
+
+## Generate Access Token
+\centering
+\includegraphics[width=\linewidth]{../../Images/twitter_authentication2.png}
+
+## Use Keys and Token String
+```{r, eval=FALSE, echo=TRUE}
+api_key <- 'CkUcfEdIvlX9c4OkBwcv062ay'
+api_key_secret <- 'lS8AuQKK7g4SD6KWzFJ84qEW7Ewqcv2OJI
+tNcwHJJWJYtumGfm'
+access_token <- '2K5LMiEwu2YXLK2389nslaqZoQA4Xc2uyI955
+1451ZYIwaEmA94'
+access_token_secret <- 'e5byw45zx7xc5d5EIPnEN1fasdf1mt
+9vpi1fiFlZQpfbk2x62-w2kxKg'
+```
+
+## Create Token
+```{r, eval=FALSE, echo=TRUE}
+## install rtweet from CRAN
+#install.packages("rtweet")
+
+# load rtweet package
+library(rtweet)
+
+wildfire <- create_token(
+  app = "Tracking_Hurricanes",
+  consumer_key = api_key,
+  consumer_secret = api_secret_key,
+  access_token = access_token,
+  access_secret = access_token_secret
+  )
+```
+\texttt{wildfire} is now the object containing the token, and rtweet has stored it as an environment variable.  Future sessions will automatically load it.
+
+## Tips
+\begin{itemize}
+\item Twitter is nice to academic research, so be honest.
+\item Application approval process is opaque and often slow.  \pause Perhaps a current favoring of COVID-19 research.
+\item Do not have apps duplicate work ``or substantially similar or overlapping use cases".
+\end{itemize}
+
+## Tips
+\begin{itemize}
+\item You may eventually have many apps and therefore many keys.  Keep a document that tracks them.  Do not share this document.
+\end{itemize}
+
+## My Key Tracking
+\includegraphics[width=\linewidth]{../../Images/twitter_keyTracking.png}
+
+## App vs. User Auth
+- You will notice, especially when checking rate limits, a distinction between user and app authentication. \
+
+- User authentication is for when a user gives your app permission to perform certain functions for it, and these functions have higher rate limits.  \href{https://developer.twitter.com/en/docs/authentication/oauth-1-0a/obtaining-user-access-tokens}{See the process here.} \
+
+- Since my research, and creating event data more broadly, does not involve users of an application, I always use app authorization only.
+
+## If Time
+If we have reached this slide and time remains in the class, I will create a new application from scratch.
